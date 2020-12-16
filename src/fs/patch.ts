@@ -1,4 +1,5 @@
 import { Stats } from 'fs'
+import { join } from 'path'
 
 export interface NexeBinary {
   blobPath: string
@@ -101,6 +102,50 @@ function shimFs(binary: NexeBinary, fs: any = require('fs')) {
     return stat
   }
 
+  const createDirent = function(parentKey: string, childName: string) {
+    const filepath = join(parentKey, childName)
+    return new fs.Dirent(
+      childName,
+      filepath in directories ? fs.constants.UV_DIRENT_DIR : fs.constants.UV_DIRENT_FILE
+    )
+  }
+  class Dir extends originalFsMethods.Dir {
+    constructor(fileEntries: any[], path: string | Buffer, options: any) {
+      super({}, path, options)
+      this.closed = false
+      this.fileEntries = fileEntries.slice()
+    }
+    read(callback: any) {
+      if (this.closed) {
+        const e = new Error('Directory handle was closed')
+        Object.assign(e, { code: 'ERR_DIR_CLOSED' })
+        throw e
+      }
+      callback(null, this.fileEntries.shift())
+    }
+    readSync(options: any) {
+      if (this.closed) {
+        const e = new Error('Directory handle was closed')
+        Object.assign(e, { code: 'ERR_DIR_CLOSED' })
+        throw e
+      }
+      return this.fileEntries.shift()
+    }
+    close(callback: any) {
+      this.closed = true
+      process.nextTick(() => {
+        this.fileEntries = null
+        callback(null)
+      })
+    }
+    async *entries(): any {
+      while (this.fileEntries.length > 0) {
+        yield this.fileEntries.shift()
+      }
+    }
+  }
+  Dir.prototype[Symbol.asyncIterator as any] = Dir.prototype.entries
+
   const ownStat = function (filepath: any, options: any) {
     setupManifest()
     const key = getKey(filepath)
@@ -187,24 +232,65 @@ function shimFs(binary: NexeBinary, fs: any = require('fs')) {
     },
     readdir: function readdir(filepath: string | Buffer, options: any, callback: any) {
       setupManifest()
-      const dir = directories[getKey(filepath)]
+      const key = getKey(filepath)
+      const dir = directories[key]
       if (dir) {
         if ('function' === typeof options) {
           callback = options
           options = { encoding: 'utf8' }
         }
-        process.nextTick(() => callback(null, Object.keys(dir)))
+        process.nextTick(() => {
+          let result = Object.keys(dir)
+          if (options.withFileTypes) {
+            result = result.map(child => createDirent(key, child))
+          }
+          callback(null, result)
+        })
       } else {
         return originalFsMethods.readdir.apply(fs, arguments)
       }
     },
     readdirSync: function readdirSync(filepath: string | Buffer, options: any) {
       setupManifest()
-      const dir = directories[getKey(filepath)]
+      const key = getKey(filepath)
+      const dir = directories[key]
       if (dir) {
-        return Object.keys(dir)
+        let result = Object.keys(dir)
+        if (options.withFileTypes) {
+          result = result.map(child => createDirent(key, child))
+        }
+        return result
       }
       return originalFsMethods.readdirSync.apply(fs, arguments)
+    },
+
+    opendir: function opendir(filepath: string | Buffer, options: any, callback: any) {
+      setupManifest()
+      const key = getKey(filepath)
+      const dir = directories[key]
+      if (dir) {
+        if ('function' === typeof options) {
+          callback = options
+          options = { encoding: 'utf8' }
+        }
+        process.nextTick(() => {
+          const files: any = Object.keys(dir).map(child => createDirent(key, child))
+          callback(null, new Dir(files, filepath, options))
+        })
+      } else {
+        return originalFsMethods.opendir.apply(fs, arguments)
+      }
+    },
+    opendirSync: function opendir(filepath: string | Buffer, options: any) {
+      setupManifest()
+      const key = getKey(filepath)
+      const dir = directories[key]
+      if (dir) {
+        const files: any = Object.keys(dir).map(child => createDirent(key, child))
+        return new Dir(files, filepath, options)
+      } else {
+        return originalFsMethods.opendir.apply(fs, arguments)
+      }
     },
 
     readFile: function readFile(filepath: any, options: any, callback: any) {
