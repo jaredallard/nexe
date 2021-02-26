@@ -58,7 +58,7 @@ export default async function main(compiler: NexeCompiler, next: () => Promise<v
   fileLines.splice(
     location.start.line,
     0,
-    '{{replace:lib/fs/bootstrap.js}}' +
+    '{{file("lib/fs/bootstrap.js")}}' +
       '\n' +
       (semverGt(version, '11.99') ? 'expandArgv1 = false;\n' : '')
   )
@@ -102,7 +102,7 @@ export default async function main(compiler: NexeCompiler, next: () => Promise<v
   } else {
     await compiler.setFileContentsAsync(
       'lib/_third_party_main.js',
-      '{{replace:lib/patches/boot-nexe.js}}'
+      '{{file("lib/patches/boot-nexe.js")}}'
     )
   }
   return next()

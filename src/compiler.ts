@@ -1,6 +1,6 @@
 import { delimiter, resolve, normalize, join } from 'path'
 import { Buffer } from 'buffer'
-import { createReadStream, ReadStream } from 'fs'
+import { createReadStream, ReadStream, mkdtempSync, statSync } from 'fs'
 import { spawn } from 'child_process'
 import { Logger, LogStep } from './logger'
 import {
@@ -18,6 +18,7 @@ import { NexeOptions, version } from './options'
 import { NexeTarget } from './target'
 import MultiStream = require('multistream')
 import { Bundle, toStream } from './fs/bundle'
+import { NexeHeader } from './fs/patch'
 import { File } from 'resolve-dependencies'
 
 const isBsd = Boolean(~process.platform.indexOf('bsd'))
@@ -117,12 +118,18 @@ export class NexeCompiler {
     }
     this.remoteAsset = options.remote + this.target.toString()
     this.src = join(this.options.temp, this.target.version)
+    const tempZipDir = mkdtempSync(join(this.options.temp, 'zip'))
+    const tempZip = join(tempZipDir, 'bundle.zip')
     this.configureScript = configure + (semverGt(this.target.version, '10.10.0') ? '.py' : '')
     this.nodeSrcBinPath = isWindows
       ? join(this.src, 'Release', 'node.exe')
       : join(this.src, 'out', 'Release', 'node')
     this.log.step('nexe ' + version, 'info')
-    this.bundle = new Bundle(options)
+    this.bundle = new Bundle({
+      cwd: options.cwd,
+      tempZip,
+      log: this.log
+    })
     if (isWindows) {
       const originalPath = process.env.PATH
       delete process.env.PATH
@@ -135,6 +142,15 @@ export class NexeCompiler {
       this.env = { ...process.env }
       python && (this.env.PYTHON = python)
     }
+  }
+
+  @bound
+  addDirectoryResource(absoluteFileName: string) {
+    return this.bundle.addDirectoryResource(absoluteFileName)
+  }
+
+  get binaryConfiguration(): Partial<NexeHeader> {
+    return {}
   }
 
   @bound
@@ -273,7 +289,7 @@ export class NexeCompiler {
   }
 
   async compileAsync(target: NexeTarget) {
-    const step = (this.compileStep = this.log.step('Compiling result'))
+    const step = (this.compileStep = this.log.step('Compiling result...'))
     const build = this.options.build
     const location = this.getNodeExecutableLocation(build ? undefined : target)
     let binary = (await pathExistsAsync(location)) ? createReadStream(location) : null
@@ -282,6 +298,7 @@ export class NexeCompiler {
       binary = await this.build()
       step.log('Node binary compiled')
     }
+    this.bundle.writeZip()
     return this._assembleDeliverable(binary!)
   }
 
@@ -300,13 +317,16 @@ export class NexeCompiler {
       codeSize = Buffer.byteLength(code),
       lengths = Buffer.from(Array(16))
 
+    const zipStat = statSync(this.bundle.tempZip)
+
+    const lengths = Buffer.from(Array(16))
     lengths.writeDoubleLE(codeSize, 0)
-    lengths.writeDoubleLE(this.bundle.size, 8)
+    lengths.writeDoubleLE(zipStat.size, 8)
     return new (MultiStream as any)([
       binary,
-      toStream(code),
-      this.bundle.toStream(),
-      toStream(Buffer.concat([Buffer.from('<nexe~~sentinel>'), lengths])),
+      toStream(startup),
+      createReadStream(this.bundle.tempZip),
+      toStream(Buffer.concat([Buffer.from('<nexe~~sentinel>'), lengths]))
     ])
   }
 }

@@ -48,7 +48,7 @@ export default async function bundle(compiler: NexeCompiler, next: any) {
   if (input === STDIN_FLAG && (code = code || dequote(await getStdIn(process.stdin)))) {
     compiler.stdinUsed = true
     compiler.entrypoint = './__nexe_stdin.js'
-    await compiler.addResource(resolve(cwd, compiler.entrypoint), code)
+    await compiler.addResource(resolve(cwd, compiler.entrypoint), Buffer.from(code, 'utf8'))
     return next()
   }
 

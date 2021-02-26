@@ -9,7 +9,8 @@ export default async function resource(compiler: NexeCompiler, next: () => Promi
     return next()
   }
   const step = compiler.log.step('Bundling Resources...')
-  let count = 0
+  let fileCount = 0
+  let dirCount = 0
 
   // workaround for https://github.com/sindresorhus/globby/issues/127
   // and https://github.com/mrmlnc/fast-glob#pattern-syntax
